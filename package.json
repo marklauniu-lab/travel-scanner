@@ -1,19 +1,15 @@
 {
   "name": "travel-hack-scanner",
-  "version": "1.0.0",
-  "description": "Live flight scanner with Sky Scrapper API proxy",
+  "version": "2.0.0",
+  "description": "MCI flight deal scanner: live Google Flights prices via SerpApi, split tickets, date scan, CPP math",
   "main": "server.js",
+  "private": true,
   "scripts": {
     "start": "node server.js",
-    "dev": "nodemon server.js"
+    "dev": "node --watch server.js"
   },
   "dependencies": {
-    "cors": "^2.8.5",
-    "express": "^4.18.2",
-    "node-fetch": "^2.7.0"
-  },
-  "devDependencies": {
-    "nodemon": "^3.0.1"
+    "express": "^4.21.2"
   },
   "engines": {
     "node": ">=18.0.0"
