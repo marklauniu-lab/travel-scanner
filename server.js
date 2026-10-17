@@ -206,6 +206,18 @@ app.get("/api/returns", async (req, res) => {
   }
 });
 
+// Strip markdown symbols and em dashes so answers read clean as plain text
+function cleanAI(text) {
+  return text
+    .replace(/\*\*(.+?)\*\*/g, "$1")
+    .replace(/__(.+?)__/g, "$1")
+    .replace(/^#{1,6}\s*/gm, "")
+    .replace(/^\s*[*•]\s+/gm, "- ")
+    .replace(/\s*—\s*/g, ". ")
+    .replace(/\.\.\s/g, ". ")
+    .trim();
+}
+
 // Claude travel-hack analysis
 app.post("/api/ai", async (req, res) => {
   try {
@@ -223,7 +235,8 @@ app.post("/api/ai", async (req, res) => {
       body: JSON.stringify({
         model: ANTHROPIC_MODEL,
         max_tokens: 1000,
-        system: `You are an expert travel hacker. Sharp, accurate, no fluff, no em dashes.
+        system: `You are an expert travel hacker. Sharp, accurate, no fluff. Plain text only: no markdown, no asterisks, no em dashes.
+Today's date is ${new Date().toISOString().slice(0, 10)}. Use it when judging how far out a trip is.
 Standing rules: MCI departures only. Domestic deals under $200 RT per person. Thu-Mon travel preferred. Search 8-10 weeks out. Min 3hr layover at MIA/ATL/ORD/JFK/LAX, 2.5hr elsewhere. On split tickets never use the last flight of the day for the domestic leg and keep a 3hr+ buffer before international departures. Confirm bag policy on LCCs (Frontier, Spirit, Arajet).
 CPP math: (cash price - taxes and fees) / points x 100. Points win above ~1.3 cents.
 Loyalty: United MileagePlus (primary), Air Canada Aeroplan, Southwest Rapid Rewards. Chase UR and Amex MR transfer 1:1 to United and Aeroplan. Hotels: Hyatt first, Marriott second.
@@ -237,8 +250,8 @@ ${context}`,
     });
     const data = await response.json();
     if (data.error) throw new Error(data.error.message || "Claude API error.");
-    const text = data.content?.find((b) => b.type === "text")?.text || "No response.";
-    res.json({ response: text });
+    const raw = data.content?.find((b) => b.type === "text")?.text || "No response.";
+    res.json({ response: cleanAI(raw) });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
