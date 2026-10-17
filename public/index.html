@@ -227,6 +227,14 @@
   const HUB_MIN = { MIA: 180, ATL: 180, ORD: 180, JFK: 180, LAX: 180 };
   const DEFAULT_MIN = 150;
   const SPLIT_BUFFER = 180;
+  const LONG_WAIT = 360; // flag hub waits over 6 hours
+  // "+1" style marker when a flight lands on a later calendar day
+  function dayShift(dep, arr) {
+    const a = parseT(dep), b = parseT(arr);
+    if (!a || !b) return "";
+    const d = Math.round((new Date(b.getFullYear(), b.getMonth(), b.getDate()) - new Date(a.getFullYear(), a.getMonth(), a.getDate())) / 86400000);
+    return d > 0 ? ` <span style="color:#F59E0B;font-weight:700">+${d}</span>` : "";
+  }
   const LCC = ["Frontier", "Spirit", "Arajet", "Allegiant", "Sun Country", "Breeze", "Avelo"];
 
   let tripType = 1, nonstop = false;
@@ -264,6 +272,7 @@
       if (code) { setAccessCode(code); return api(path, opts, true); }
     }
     if (!res.ok || data.error) throw new Error(data.error || `Request failed (${res.status})`);
+    if (data.cached === false) countSearch();
     return data;
   }
 
@@ -317,15 +326,27 @@
     }
   }
 
+  // Search counter: SerpApi's account count lags a few minutes, so count down locally
+  // on every search that used a credit, then let the server number catch up.
+  const usage = { serverLeft: null, perMonth: null, pending: 0 };
+  function renderUsage() {
+    if (usage.serverLeft == null) return;
+    const left = Math.max(0, usage.serverLeft - usage.pending);
+    $("usage-num").textContent = `${left}${usage.perMonth ? " / " + usage.perMonth : ""}`;
+    const pct = usage.perMonth ? Math.max(0, Math.min(100, (left / usage.perMonth) * 100)) : 100;
+    const fill = $("usage-fill");
+    fill.style.width = pct + "%";
+    fill.style.background = pct < 15 ? "#EF4444" : pct < 40 ? "#F59E0B" : "#10B981";
+  }
+  function countSearch() { usage.pending++; renderUsage(); }
   async function loadUsage() {
     try {
       const u = await api("/api/usage");
       if (u.left == null) return;
-      $("usage-num").textContent = `${u.left}${u.perMonth ? " / " + u.perMonth : ""}`;
-      const pct = u.perMonth ? Math.max(0, Math.min(100, (u.left / u.perMonth) * 100)) : 100;
-      const fill = $("usage-fill");
-      fill.style.width = pct + "%";
-      fill.style.background = pct < 15 ? "#EF4444" : pct < 40 ? "#F59E0B" : "#10B981";
+      if (usage.serverLeft != null && u.left < usage.serverLeft) usage.pending = Math.max(0, usage.pending - (usage.serverLeft - u.left));
+      if (usage.serverLeft != null && u.left > usage.serverLeft) usage.pending = 0; // new month reset
+      usage.serverLeft = u.left; usage.perMonth = u.perMonth;
+      renderUsage();
     } catch (e) { $("usage-num").textContent = "--"; $("usage").title = e.message; }
   }
 
@@ -343,6 +364,7 @@
     if (lcc.length) out.push(`<span class="badge b-warn">🧳 ${esc(lcc.join(", "))}: confirm bag policy</span>`);
     if (it.segments.some((s) => s.oftenDelayed)) out.push(`<span class="badge b-warn">⏱ Often delayed 30m+</span>`);
     if (opts.lastOfDay) { bad = true; out.push(`<span class="badge b-bad">⚠ Last flight of the day on a split leg</span>`); }
+    if (opts.longWait) out.push(`<span class="badge b-warn">⏳ Long self-transfer wait: ${fmtDur(opts.longWait)} at the hub</span>`);
     if (opts.deal) out.push(`<span class="badge b-ok">🔥 Under $200 domestic RT</span>`);
     return { html: out.join(""), bad };
   }
@@ -359,7 +381,7 @@
     return `<div class="flight-card ${bad ? "bad" : ""}"><div class="flight-header"><div style="flex:1">
       ${opts.title ? `<div class="section-label" style="margin:0 0 6px">${esc(opts.title)}</div>` : ""}
       <div class="flight-route">${esc(route)}</div>
-      <div class="flight-meta">${esc(fmtDay(it.departTime.slice(0, 10)))} · ${esc(fmtTime(it.departTime))} → ${esc(fmtTime(it.arriveTime))} · ${stops} · ${fmtDur(it.totalDuration)}</div>
+      <div class="flight-meta">${esc(fmtDay(it.departTime.slice(0, 10)))} · ${esc(fmtTime(it.departTime))} → ${esc(fmtTime(it.arriveTime))}${dayShift(it.departTime, it.arriveTime)} · ${stops} · ${fmtDur(it.totalDuration)}</div>
       <div class="flight-carrier">${flights}</div>
     </div><div class="flight-price"><div class="price-per">${money(it.price)}</div><div class="price-label">${label}</div>${total}</div></div>${badges}${retBtn}</div>`;
   }
@@ -483,12 +505,12 @@
       last.split = { hub, perPerson, outPair, backPair, trip: t };
       const legs = [
         { it: outPair.a, title: `Leg 1 · ${t.from} → ${hub}`, opts: l1, domestic: true },
-        { it: outPair.b, title: `Leg 2 · ${hub} → ${t.to} · ${fmtDur(outPair.gap)} buffer` },
+        { it: outPair.b, title: `Leg 2 · ${hub} → ${t.to} · ${fmtDur(outPair.gap)} buffer`, gap: outPair.gap },
         { it: backPair.a, title: `Leg 3 · ${t.to} → ${hub}` },
-        { it: backPair.b, title: `Leg 4 · ${hub} → ${t.from} · ${fmtDur(backPair.gap)} buffer`, opts: l4, domestic: true },
+        { it: backPair.b, title: `Leg 4 · ${hub} → ${t.from} · ${fmtDur(backPair.gap)} buffer`, opts: l4, domestic: true, gap: backPair.gap },
       ];
       out.innerHTML = `<div class="alert alert-warn">Split tickets are separate bookings. A missed connection is on you, and bags usually need to be re-checked at ${esc(hub)}.</div>` +
-        legs.map((L) => flightCard(L.it, t.pax, { title: L.title, oneWay: true, priceLabel: "one way pp", lastOfDay: L.domestic && isLastOfDay(L.it, L.opts) })).join("");
+        legs.map((L) => flightCard(L.it, t.pax, { title: L.title, oneWay: true, priceLabel: "one way pp", lastOfDay: L.domestic && isLastOfDay(L.it, L.opts), longWait: L.gap > LONG_WAIT ? L.gap : 0 })).join("");
       const rt = last.search && last.search.trip.from === t.from && last.search.trip.to === t.to && last.search.trip.depart === t.depart && last.search.trip.ret === t.ret && last.search.tripType === 1
         ? cleanBest(last.search).price : null;
       ver.innerHTML = splitVerdict(rt, perPerson, t.pax);
@@ -560,7 +582,12 @@
 
   // ---------- AI ----------
   function aiContext() {
-    const t = trip(), lines = [`Trip: ${t.from} to ${t.to || "?"}, ${tripType === 1 ? "round trip" : "one way"}, depart ${t.depart}${tripType === 1 ? ", return " + t.ret : ""}, ${t.pax} passenger(s).`];
+    const t = trip(), today = new Date();
+    const weeksOut = t.depart ? ((new Date(t.depart + "T12:00:00") - today) / 604800000).toFixed(1) : "?";
+    const lines = [
+      `Today is ${ymd(today)}.`,
+      `Trip: ${t.from} to ${t.to || "?"}, ${tripType === 1 ? "round trip" : "one way"}, depart ${t.depart}${tripType === 1 ? ", return " + t.ret : ""}, ${t.pax} passenger(s). Departure is ${weeksOut} weeks from today.`,
+    ];
     const s = last.search;
     if (s) {
       lines.push(`Live search (${s.trip.from}-${s.trip.to} ${s.trip.depart}${s.tripType === 1 ? " to " + s.trip.ret : ""}): cheapest rule-compliant $${cleanBest(s).price} per person (cheapest overall $${s.itineraries[0].price})${s.tripType === 1 ? " RT" : ""}.`);
